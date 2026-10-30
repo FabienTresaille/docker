@@ -1,0 +1,5 @@
+# Fichiers sensibles à NE JAMAIS pousser sur GitHub !
+.env
+acme.json
+*.log
+.DS_Store

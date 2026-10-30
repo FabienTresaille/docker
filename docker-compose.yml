@@ -1,0 +1,60 @@
+services:
+  # 1. Proxy de sécurité pour isoler le socket Docker (Empêche la prise de contrôle root)
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: core-socket-guard
+    restart: unless-stopped
+    privileged: true
+    environment:
+      - CONTAINERS=1
+      - NETWORKS=1
+      - SERVICES=1
+      - TASKS=1
+      - POST=0 # Interdit formellement de créer/modifier/supprimer des conteneurs
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - socket-guard-net
+
+  # 2. Reverse Proxy Traefik v3
+  traefik:
+    image: traefik:v3.2
+    container_name: core-edge-router
+    restart: unless-stopped
+    depends_on:
+      - socket-proxy
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # Support HTTP/3 (QUIC)
+    env_file:
+      - .env
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./dynamic:/etc/traefik/dynamic:ro
+      - ./acme.json:/etc/traefik/acme.json
+    networks:
+      - edge-public-net
+      - socket-guard-net
+    labels:
+      - "traefik.enable=true"
+      # Routeur du Dashboard (Accessible uniquement en HTTPS avec authentification)
+      - "traefik.http.routers.edge-dash.rule=Host(`${TRAEFIK_DASHBOARD_DOMAIN}`)"
+      - "traefik.http.routers.edge-dash.entrypoints=websecure"
+      - "traefik.http.routers.edge-dash.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.edge-dash.service=api@internal"
+      - "traefik.http.routers.edge-dash.middlewares=sec-headers@file,rate-limit@file,dash-auth"
+      # Identifiants hachés (htpasswd) injectés depuis le fichier .env
+      - "traefik.http.middlewares.dash-auth.basicauth.users=${TRAEFIK_BASIC_AUTH}"
+
+networks:
+  # Réseau public sur lequel viendront se brancher vos sites (alsek, vitrine-caladoise, etc.)
+  edge-public-net:
+    external: true
+  # Réseau interne ultra-isolé uniquement entre Traefik et le Socket Proxy
+  socket-guard-net:
+    driver: bridge
+    internal: true
